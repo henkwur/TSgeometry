@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "image2las"
+version = "0.1.0"
+description = "Convert image-encoded data into a LAS point cloud"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "laspy>=2.5",
+  "numpy>=1.24",
+  "Pillow>=10.0",
+  "tifffile>=2025.5.10",
+  "spectral>=0.24",
+]
+
+[project.scripts]
+image2las = "image2las.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
