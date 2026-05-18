@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import re
 from typing import Literal
 
 import laspy
@@ -65,6 +66,122 @@ def _read_envi_metadata(hdr_path: Path) -> dict:
     return metadata
 
 
+def _extract_offset_wgs84(metadata: dict) -> tuple[float, float] | None:
+    """Extract OffsetLat/OffsetLong from ENVI metadata when available."""
+    lat = metadata.get("offsetlat")
+    lon = metadata.get("offsetlong")
+    if lat is not None and lon is not None:
+        try:
+            return float(lat), float(lon)
+        except (TypeError, ValueError):
+            return None
+
+    extra_info = metadata.get("extrainfo")
+    if not isinstance(extra_info, str):
+        return None
+
+    lat_match = re.search(r"OffsetLat\s*:\s*([-+]?\d+(?:\.\d+)?)", extra_info)
+    lon_match = re.search(r"OffsetLong\s*:\s*([-+]?\d+(?:\.\d+)?)", extra_info)
+    if not lat_match or not lon_match:
+        return None
+
+    return float(lat_match.group(1)), float(lon_match.group(1))
+
+
+def _extract_plot_angle(metadata: dict) -> float | None:
+    """Extract PlotAngle (degrees, 0 = North) from ENVI metadata when available."""
+    angle = metadata.get("plotangle")
+    if angle is not None:
+        try:
+            return float(angle)
+        except (TypeError, ValueError):
+            return None
+
+    extra_info = metadata.get("extrainfo")
+    if not isinstance(extra_info, str):
+        return None
+
+    angle_match = re.search(r"PlotAngle\s*:\s*([-+]?\d+(?:\.\d+)?)", extra_info)
+    if not angle_match:
+        return None
+
+    return float(angle_match.group(1))
+
+
+def _extract_plot_position(metadata: dict) -> tuple[float, float] | None:
+    """Extract PlotPositionX/PlotPositionY in meters from ENVI metadata."""
+    pos_x = metadata.get("plotpositionx")
+    pos_y = metadata.get("plotpositiony")
+    if pos_x is not None and pos_y is not None:
+        try:
+            return float(pos_x), float(pos_y)
+        except (TypeError, ValueError):
+            return None
+
+    extra_info = metadata.get("extrainfo")
+    if not isinstance(extra_info, str):
+        return None
+
+    x_match = re.search(r"PlotPositionX\s*:\s*([-+]?\d+(?:\.\d+)?)", extra_info)
+    y_match = re.search(r"PlotPositionY\s*:\s*([-+]?\d+(?:\.\d+)?)", extra_info)
+    if not x_match or not y_match:
+        return None
+
+    return float(x_match.group(1)), float(y_match.group(1))
+
+
+def _rotate_xy_from_north_clockwise(x: np.ndarray, y: np.ndarray, angle_deg: float) -> tuple[np.ndarray, np.ndarray]:
+    """Rotate local XY where angle is clockwise from North.
+
+    In RD New convention, X points East and Y points North.
+    """
+    theta = np.deg2rad(angle_deg)
+    cos_t = np.cos(theta)
+    sin_t = np.sin(theta)
+
+    x_rot = (x * cos_t) + (y * sin_t)
+    y_rot = (-x * sin_t) + (y * cos_t)
+    return x_rot, y_rot
+
+
+def _wgs84_to_rd_new(lat: float, lon: float) -> tuple[float, float]:
+    """Convert WGS84 latitude/longitude to RD New (EPSG:28992)."""
+    from pyproj import Transformer
+
+    transformer = Transformer.from_crs("EPSG:4326", "EPSG:28992", always_xy=True)
+    x_rd, y_rd = transformer.transform(lon, lat)
+    return float(x_rd), float(y_rd)
+
+
+def _write_offset_shapefile(shp_path: Path, rd_x: float, rd_y: float, source_name: str) -> None:
+    """Write a point shapefile in RD New (EPSG:28992) for the offset origin."""
+    import shapefile
+
+    shp_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with shapefile.Writer(str(shp_path), shapeType=shapefile.POINT) as writer:
+        writer.autoBalance = 1
+        writer.field("name", "C", size=80)
+        writer.field("x_rd", "F", size=18, decimal=3)
+        writer.field("y_rd", "F", size=18, decimal=3)
+        writer.point(rd_x, rd_y)
+        writer.record(source_name, rd_x, rd_y)
+
+    # Coordinate reference for RD New.
+    prj_wkt = (
+        'PROJCS["Amersfoort / RD New",GEOGCS["Amersfoort",DATUM["Amersfoort",'
+        'SPHEROID["Bessel 1841",6377397.155,299.1528128]],PRIMEM["Greenwich",0],'
+        'UNIT["degree",0.0174532925199433]],PROJECTION["Oblique_Stereographic"],'
+        'PARAMETER["latitude_of_origin",52.15616055555555],'
+        'PARAMETER["central_meridian",5.38763888888889],'
+        'PARAMETER["scale_factor",0.9999079],'
+        'PARAMETER["false_easting",155000],PARAMETER["false_northing",463000],'
+        'UNIT["metre",1],AXIS["X",EAST],AXIS["Y",NORTH]]'
+    )
+    shp_path.with_suffix(".prj").write_text(prj_wkt, encoding="ascii")
+    shp_path.with_suffix(".cpg").write_text("UTF-8\n", encoding="ascii")
+
+
 def _load_image_array(input_path: Path) -> np.ndarray:
     if input_path.suffix.lower() == ".hdr":
         try:
@@ -72,8 +189,10 @@ def _load_image_array(input_path: Path) -> np.ndarray:
 
             img = spy.open_image(str(input_path))
             return np.asarray(img.load())
-        except Exception:
-            pass
+        except Exception as exc:
+            raise ValueError(
+                "Unable to load ENVI header. Ensure the matching ENVI data file (for example .raw) exists next to the .hdr file."
+            ) from exc
 
     if input_path.suffix.lower() in {".tif", ".tiff"}:
         try:
@@ -202,6 +321,14 @@ def _extract_rgb(
 
 def convert_image_to_las(config: ConversionConfig) -> Path:
     array = _load_image_array(config.input_path)
+    metadata = _read_envi_metadata(config.input_path)
+    plot_angle_deg = _extract_plot_angle(metadata)
+    plot_position = _extract_plot_position(metadata)
+    rd_origin: tuple[float, float] | None = None
+    wgs84_origin = _extract_offset_wgs84(metadata)
+    if wgs84_origin is not None:
+        rd_origin = _wgs84_to_rd_new(wgs84_origin[0], wgs84_origin[1])
+
     red_points: np.ndarray | None = None
     green_points: np.ndarray | None = None
     blue_points: np.ndarray | None = None
@@ -262,10 +389,39 @@ def convert_image_to_las(config: ConversionConfig) -> Path:
                 config.rgb_clip_high_percentile,
             )
 
+    plot_origin_x: float | None = None
+    plot_origin_y: float | None = None
+    if rd_origin is not None:
+        origin_x = rd_origin[0]
+        origin_y = rd_origin[1]
+        if plot_position is not None:
+            origin_x += plot_position[0]
+            origin_y += plot_position[1]
+
+        # First move points to the translated plot origin.
+        x_points = x_points + origin_x
+        y_points = y_points + origin_y
+        plot_origin_x = origin_x
+        plot_origin_y = origin_y
+
+    # Then rotate around the new plot origin if available.
+    if plot_angle_deg is not None:
+        if plot_origin_x is not None and plot_origin_y is not None:
+            local_x = x_points - plot_origin_x
+            local_y = y_points - plot_origin_y
+            local_x, local_y = _rotate_xy_from_north_clockwise(local_x, local_y, plot_angle_deg)
+            x_points = local_x + plot_origin_x
+            y_points = local_y + plot_origin_y
+        else:
+            x_points, y_points = _rotate_xy_from_north_clockwise(x_points, y_points, plot_angle_deg)
+
     # Set LAS header with proper scales for 0.1mm precision
     header = laspy.LasHeader(point_format=3, version="1.2")
     header.scales = [0.0001, 0.0001, 0.0001]
-    header.offsets = [float(x_points.min(initial=0.0)), float(y_points.min(initial=0.0)), float(z_points.min(initial=0.0))]
+    if plot_origin_x is not None and plot_origin_y is not None:
+        header.offsets = [plot_origin_x, plot_origin_y, float(z_points.min(initial=0.0))]
+    else:
+        header.offsets = [float(x_points.min(initial=0.0)), float(y_points.min(initial=0.0)), float(z_points.min(initial=0.0))]
 
     las = laspy.LasData(header)
     las.x = x_points
@@ -276,6 +432,18 @@ def convert_image_to_las(config: ConversionConfig) -> Path:
         las.green = green_points
         las.blue = blue_points
     las.write(config.output_path)
+
+    if rd_origin is not None:
+        offset_shp_path = config.output_path.parent / f"{config.input_path.stem}_Offset.shp"
+        _write_offset_shapefile(offset_shp_path, rd_origin[0], rd_origin[1], config.input_path.stem)
+
+        translated_x = rd_origin[0]
+        translated_y = rd_origin[1]
+        if plot_position is not None:
+            translated_x += plot_position[0]
+            translated_y += plot_position[1]
+        plot_offset_shp_path = config.output_path.parent / f"{config.input_path.stem}_plotoffset.shp"
+        _write_offset_shapefile(plot_offset_shp_path, translated_x, translated_y, f"{config.input_path.stem}_plotoffset")
 
     return config.output_path
 
