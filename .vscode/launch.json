@@ -1,0 +1,15 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    
+
+    {
+      "name": "image2las GUI",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "image2las.gui",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}"
+    }
+  ]
+}

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "image2las"
-version = "1.0.0"
+version = "1.1.0"
 description = "Convert image-encoded data into a LAS point cloud"
 readme = "README.md"
 requires-python = ">=3.10"
