@@ -14,10 +14,14 @@ dependencies = [
   "Pillow>=10.0",
   "tifffile>=2025.5.10",
   "spectral>=0.24",
+  "platformdirs>=3.0",
 ]
 
 [project.scripts]
 image2las = "image2las.cli:main"
+
+[project.gui-scripts]
+image2las-gui = "image2las.gui:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
