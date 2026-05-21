@@ -5,7 +5,13 @@ from pathlib import Path
 import re
 from typing import Callable
 
-from .converter import ConversionConfig, convert_image_to_las
+from .converter import (
+    ConversionConfig,
+    _extract_plot_point_wgs84,
+    _read_envi_metadata,
+    _wgs84_to_rd_new,
+    convert_image_to_las,
+)
 
 
 @dataclass(slots=True)
@@ -24,6 +30,13 @@ def _natural_key(text: str) -> tuple[object, ...]:
         else:
             key.append(part.lower())
     return tuple(key)
+
+
+def _plot_number(plot_id: str) -> int | None:
+    match = re.search(r"\d+", plot_id)
+    if not match:
+        return None
+    return int(match.group())
 
 
 def discover_envi_fused_hdr_files(root_folder: Path) -> list[Path]:
@@ -88,13 +101,33 @@ def convert_root_folder(
         include_vnir=include_vnir,
         include_swir=include_swir,
     )
+    plot_ids = {path: infer_plot_id(root_folder, path) for path in files}
     files.sort(
         key=lambda path: (
-            _natural_key(infer_plot_id(root_folder, path)),
+            _natural_key(plot_ids[path]),
             _natural_key(path.stem),
             str(path).lower(),
         )
     )
+
+    plot_enter_rd_by_file: dict[Path, tuple[float, float]] = {}
+    for path in files:
+        metadata = _read_envi_metadata(path)
+        plot_enter_wgs84 = _extract_plot_point_wgs84(metadata, "PlotEnter")
+        if plot_enter_wgs84 is None:
+            continue
+        plot_enter_rd_by_file[path] = _wgs84_to_rd_new(plot_enter_wgs84[0], plot_enter_wgs84[1])
+
+    reference_plot_enter_rd: tuple[float, float] | None = None
+    for path in files:
+        if _plot_number(plot_ids[path]) == 1 and path in plot_enter_rd_by_file:
+            reference_plot_enter_rd = plot_enter_rd_by_file[path]
+            break
+    if reference_plot_enter_rd is None:
+        for path in files:
+            if path in plot_enter_rd_by_file:
+                reference_plot_enter_rd = plot_enter_rd_by_file[path]
+                break
 
     total = len(files)
     for index, input_hdr in enumerate(files, start=1):
@@ -105,13 +138,20 @@ def convert_root_folder(
         if on_progress is not None:
             on_progress(index, total, input_hdr)
 
-        plot_id = infer_plot_id(root_folder, input_hdr)
+        plot_id = plot_ids[input_hdr]
         output_folder = output_root / plot_id
         output_folder.mkdir(parents=True, exist_ok=True)
         output_path = output_folder / f"{input_hdr.stem}.las"
 
         try:
             config = config_builder(input_hdr, output_path)
+            current_plot_enter_rd = plot_enter_rd_by_file.get(input_hdr)
+            if reference_plot_enter_rd is not None and current_plot_enter_rd is not None:
+                config.plot_offset_reference_plot_enter_rd = reference_plot_enter_rd
+                config.plot_offset_delta_rd = (
+                    current_plot_enter_rd[0] - reference_plot_enter_rd[0],
+                    current_plot_enter_rd[1] - reference_plot_enter_rd[1],
+                )
             convert_image_to_las(config)
             converted.append(output_path)
         except Exception as exc:  # noqa: BLE001

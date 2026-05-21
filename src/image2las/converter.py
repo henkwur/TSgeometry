@@ -43,6 +43,8 @@ class ConversionConfig:
     rgb_clip_low_percentile: float = 1.0
     rgb_clip_high_percentile: float = 99.5
     write_las: bool = True
+    plot_offset_delta_rd: tuple[float, float] | None = None
+    plot_offset_reference_plot_enter_rd: tuple[float, float] | None = None
 
 
 def _offset_source_label(metadata: dict) -> str:
@@ -80,8 +82,10 @@ def _write_georef_report(
     offset_wgs84: tuple[float, float] | None,
     offset_rd: tuple[float, float] | None,
     plot_position: tuple[float, float] | None,
+    plot_offset_delta_rd: tuple[float, float] | None,
     plot_offset_rd: tuple[float, float] | None,
     plot_enter_wgs84: tuple[float, float] | None,
+    plot_enter_reference_rd: tuple[float, float] | None,
     plot_enter_rd: tuple[float, float] | None,
     plot_exit_wgs84: tuple[float, float] | None,
     plot_exit_rd: tuple[float, float] | None,
@@ -116,6 +120,9 @@ def _write_georef_report(
         if plot_enter_wgs84 is not None:
             handle.write(f"- PlotEnterLat = {plot_enter_wgs84[0]:.12f}\n")
             handle.write(f"- PlotEnterLong = {plot_enter_wgs84[1]:.12f}\n")
+        if plot_enter_reference_rd is not None:
+            handle.write(f"- PlotEnterRef.X (Plot 1) = {plot_enter_reference_rd[0]:.6f}\n")
+            handle.write(f"- PlotEnterRef.Y (Plot 1) = {plot_enter_reference_rd[1]:.6f}\n")
         if plot_exit_wgs84 is not None:
             handle.write(f"- PlotExitLat = {plot_exit_wgs84[0]:.12f}\n")
             handle.write(f"- PlotExitLong = {plot_exit_wgs84[1]:.12f}\n")
@@ -134,13 +141,32 @@ def _write_georef_report(
             step += 1
 
         if offset_rd is not None and plot_offset_rd is not None:
-            px = plot_position[0] if plot_position is not None else 0.0
-            py = plot_position[1] if plot_position is not None else 0.0
-            handle.write(f"{step}) PlotOffset (translated from Offset)\n")
-            handle.write("   PlotOffset.X = Offset.X + PlotPositionX\n")
-            handle.write("   PlotOffset.Y = Offset.Y + PlotPositionY\n")
-            handle.write(f"   PlotOffset.X = {offset_rd[0]:.6f} + {px:.12f} = {plot_offset_rd[0]:.6f}\n")
-            handle.write(f"   PlotOffset.Y = {offset_rd[1]:.6f} + {py:.12f} = {plot_offset_rd[1]:.6f}\n\n")
+            if plot_offset_delta_rd is not None and plot_enter_rd is not None and plot_enter_reference_rd is not None:
+                handle.write(f"{step}) PlotOffsetNew (delta from PlotEnter of Plot 1)\n")
+                handle.write("   Delta.X = PlotEnter.X(current) - PlotEnter.X(plot1)\n")
+                handle.write("   Delta.Y = PlotEnter.Y(current) - PlotEnter.Y(plot1)\n")
+                handle.write(
+                    f"   Delta.X = {plot_enter_rd[0]:.6f} - {plot_enter_reference_rd[0]:.6f} = {plot_offset_delta_rd[0]:.6f}\n"
+                )
+                handle.write(
+                    f"   Delta.Y = {plot_enter_rd[1]:.6f} - {plot_enter_reference_rd[1]:.6f} = {plot_offset_delta_rd[1]:.6f}\n"
+                )
+                handle.write("   PlotOffset.X = Offset.X + Delta.X\n")
+                handle.write("   PlotOffset.Y = Offset.Y + Delta.Y\n")
+                handle.write(
+                    f"   PlotOffset.X = {offset_rd[0]:.6f} + {plot_offset_delta_rd[0]:.6f} = {plot_offset_rd[0]:.6f}\n"
+                )
+                handle.write(
+                    f"   PlotOffset.Y = {offset_rd[1]:.6f} + {plot_offset_delta_rd[1]:.6f} = {plot_offset_rd[1]:.6f}\n\n"
+                )
+            else:
+                px = plot_position[0] if plot_position is not None else 0.0
+                py = plot_position[1] if plot_position is not None else 0.0
+                handle.write(f"{step}) PlotOffset (translated from Offset)\n")
+                handle.write("   PlotOffset.X = Offset.X + PlotPositionX\n")
+                handle.write("   PlotOffset.Y = Offset.Y + PlotPositionY\n")
+                handle.write(f"   PlotOffset.X = {offset_rd[0]:.6f} + {px:.12f} = {plot_offset_rd[0]:.6f}\n")
+                handle.write(f"   PlotOffset.Y = {offset_rd[1]:.6f} + {py:.12f} = {plot_offset_rd[1]:.6f}\n\n")
             step += 1
 
         if plot_enter_wgs84 is not None and plot_enter_rd is not None:
@@ -556,7 +582,10 @@ def convert_image_to_las(config: ConversionConfig) -> Path:
     if rd_origin is not None:
         origin_x = rd_origin[0]
         origin_y = rd_origin[1]
-        if plot_position is not None:
+        if config.plot_offset_delta_rd is not None:
+            origin_x += config.plot_offset_delta_rd[0]
+            origin_y += config.plot_offset_delta_rd[1]
+        elif plot_position is not None:
             origin_x += plot_position[0]
             origin_y += plot_position[1]
 
@@ -603,7 +632,10 @@ def convert_image_to_las(config: ConversionConfig) -> Path:
 
         translated_x = rd_origin[0]
         translated_y = rd_origin[1]
-        if plot_position is not None:
+        if config.plot_offset_delta_rd is not None:
+            translated_x += config.plot_offset_delta_rd[0]
+            translated_y += config.plot_offset_delta_rd[1]
+        elif plot_position is not None:
             translated_x += plot_position[0]
             translated_y += plot_position[1]
         plot_offset_rd = (translated_x, translated_y)
@@ -619,19 +651,22 @@ def convert_image_to_las(config: ConversionConfig) -> Path:
         _write_offset_shapefile(plot_exit_shp_path, plot_exit_rd[0], plot_exit_rd[1], f"{config.input_path.stem}_PlotExit")
 
     if rd_origin is not None or plot_enter_rd is not None or plot_exit_rd is not None:
+        uses_plot_offset_new = config.plot_offset_delta_rd is not None and config.plot_offset_reference_plot_enter_rd is not None
         report_path = config.output_path.parent / f"{config.input_path.stem}_offsets.txt"
         _write_georef_report(
             report_path,
             config.input_path.name,
             _offset_source_label(metadata) if wgs84_origin is not None else None,
-            _plot_position_source_label(metadata) if rd_origin is not None else None,
+            _plot_position_source_label(metadata) if (rd_origin is not None and not uses_plot_offset_new) else None,
             _plot_point_source_label(metadata, "PlotEnter") if plot_enter_wgs84 is not None else None,
             _plot_point_source_label(metadata, "PlotExit") if plot_exit_wgs84 is not None else None,
             wgs84_origin,
             rd_origin,
-            plot_position,
+            plot_position if not uses_plot_offset_new else None,
+            config.plot_offset_delta_rd,
             plot_offset_rd,
             plot_enter_wgs84,
+            config.plot_offset_reference_plot_enter_rd,
             plot_enter_rd,
             plot_exit_wgs84,
             plot_exit_rd,

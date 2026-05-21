@@ -180,3 +180,48 @@ def test_convert_root_folder_respects_sensor_filters(tmp_path: Path) -> None:
 
     assert len(result.failed) == 0
     assert seen_inputs == ["plot1_SWIR.hdr"]
+
+
+def test_convert_root_folder_sets_plot_offset_delta_from_plot1(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    fused_1 = root / "1" / "1_20260521" / "meta" / "ENVI-fused"
+    fused_2 = root / "2" / "2_20260521" / "meta" / "ENVI-fused"
+    fused_1.mkdir(parents=True)
+    fused_2.mkdir(parents=True)
+
+    (fused_1 / "plot1_VNIR.hdr").write_text(
+        "ExtraInfo = { PlotEnterLat:51.000000, PlotEnterLong:5.000000 }\n",
+        encoding="utf-8",
+    )
+    (fused_2 / "plot2_VNIR.hdr").write_text(
+        "ExtraInfo = { PlotEnterLat:51.100000, PlotEnterLong:5.200000 }\n",
+        encoding="utf-8",
+    )
+
+    output_root = tmp_path / "out"
+    seen_deltas: dict[str, tuple[float, float] | None] = {}
+
+    original_convert = batch.convert_image_to_las
+    original_wgs84_to_rd = batch._wgs84_to_rd_new
+    try:
+        batch._wgs84_to_rd_new = lambda lat, lon: (lon * 1000.0, lat * 1000.0)
+
+        def fake_convert(config: ConversionConfig) -> Path:
+            seen_deltas[config.input_path.name] = config.plot_offset_delta_rd
+            config.output_path.parent.mkdir(parents=True, exist_ok=True)
+            config.output_path.write_text("ok", encoding="utf-8")
+            return config.output_path
+
+        batch.convert_image_to_las = fake_convert
+
+        def build_config(input_hdr: Path, output_las: Path) -> ConversionConfig:
+            return ConversionConfig(input_path=input_hdr, output_path=output_las)
+
+        result = batch.convert_root_folder(root, output_root, build_config)
+    finally:
+        batch.convert_image_to_las = original_convert
+        batch._wgs84_to_rd_new = original_wgs84_to_rd
+
+    assert len(result.failed) == 0
+    assert seen_deltas["plot1_VNIR.hdr"] == (0.0, 0.0)
+    assert seen_deltas["plot2_VNIR.hdr"] == (200.0, 100.0)
