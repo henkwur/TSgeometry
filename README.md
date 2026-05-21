@@ -4,6 +4,15 @@ A small Python CLI for turning image-encoded values into a LAS point cloud.
 
 Each pixel becomes one point. By default the pixel brightness is used as height, but you can also choose a specific RGB channel.
 
+## Release Notes
+
+### v1.3
+
+- Added persistent GUI/debug launch support for the project venv.
+- Preserved full input image stem in generated LAS filenames.
+- Exported RD New shapefiles for `Offset`, `PlotOffset`, `PlotEnter`, and `PlotExit` when present in ENVI metadata.
+- Added `*_offsets.txt` report with source fields, timestamps, and exact georeference calculations.
+
 ## Setup
 
 Install the project dependencies in a virtual environment:
@@ -34,6 +43,7 @@ image2las data.hdr output.las --band 93 \
 ```
 
 Scale factors are calculated as:
+
 - `x_scale = physical_width_m / pixel_width`
 - `y_scale = physical_height_m / pixel_height`
 - `z_scale = physical_height_m / max_value_in_band`
