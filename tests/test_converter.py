@@ -287,6 +287,46 @@ def test_plot_enter_exit_are_exported_to_rdnew_and_reported(tmp_path: Path) -> N
     assert "PlotExit\t5400.000000\t51300.000000" in lines
 
 
+def test_skip_las_write_still_generates_reports(tmp_path: Path) -> None:
+    input_path = tmp_path / "input.png"
+    output_path = tmp_path / "output.las"
+
+    image = Image.new("L", (1, 1))
+    image.putdata([0])
+    image.save(input_path)
+
+    from image2las import converter
+
+    original_read_metadata = converter._read_envi_metadata
+    original_extract_offset = converter._extract_offset_wgs84
+    original_wgs84_to_rd = converter._wgs84_to_rd_new
+    try:
+        converter._read_envi_metadata = lambda _p: {
+            "extrainfo": "{ PlotPositionX:3.0, PlotPositionY:-4.0 }"
+        }
+        converter._extract_offset_wgs84 = lambda _m: (51.0, 5.0)
+        converter._wgs84_to_rd_new = lambda _lat, _lon: (1000.0, 2000.0)
+
+        convert_image_to_las(
+            ConversionConfig(
+                input_path=input_path,
+                output_path=output_path,
+                invert_y=False,
+                use_envi_coordinates=False,
+                write_las=False,
+            )
+        )
+    finally:
+        converter._read_envi_metadata = original_read_metadata
+        converter._extract_offset_wgs84 = original_extract_offset
+        converter._wgs84_to_rd_new = original_wgs84_to_rd
+
+    assert not output_path.exists()
+    assert (tmp_path / "input_offsets.txt").exists()
+    assert (tmp_path / "input_Offset.shp").exists()
+    assert (tmp_path / "input_plotoffset.shp").exists()
+
+
 def test_rotation_happens_after_plot_position_translation(tmp_path: Path) -> None:
     input_path = tmp_path / "input.png"
     output_path = tmp_path / "output.las"

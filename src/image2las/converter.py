@@ -42,6 +42,7 @@ class ConversionConfig:
     blue_channel: int = 24
     rgb_clip_low_percentile: float = 1.0
     rgb_clip_high_percentile: float = 99.5
+    write_las: bool = True
 
 
 def _offset_source_label(metadata: dict) -> str:
@@ -584,15 +585,16 @@ def convert_image_to_las(config: ConversionConfig) -> Path:
     else:
         header.offsets = [float(x_points.min(initial=0.0)), float(y_points.min(initial=0.0)), float(z_points.min(initial=0.0))]
 
-    las = laspy.LasData(header)
-    las.x = x_points
-    las.y = y_points
-    las.z = z_points
-    if red_points is not None and green_points is not None and blue_points is not None:
-        las.red = red_points
-        las.green = green_points
-        las.blue = blue_points
-    las.write(config.output_path)
+    if config.write_las:
+        las = laspy.LasData(header)
+        las.x = x_points
+        las.y = y_points
+        las.z = z_points
+        if red_points is not None and green_points is not None and blue_points is not None:
+            las.red = red_points
+            las.green = green_points
+            las.blue = blue_points
+        las.write(config.output_path)
 
     plot_offset_rd: tuple[float, float] | None = None
     if rd_origin is not None:

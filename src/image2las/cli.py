@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from .batch import convert_root_folder
 from .converter import ConversionConfig, convert_image_to_las
 
 
@@ -60,32 +61,49 @@ def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
 
-    config = ConversionConfig(
-        input_path=args.input,
-        output_path=args.output,
-        channel=args.channel,
-        x_scale=args.x_scale,
-        y_scale=args.y_scale,
-        z_scale=args.z_scale,
-        x_offset=args.x_offset,
-        y_offset=args.y_offset,
-        z_offset=args.z_offset,
-        invert_y=not args.no_invert_y,
-        band_index=args.band,
-        use_envi_coordinates=args.envi_coordinates,
-        x_meter_channel=args.x_meter_channel,
-        x_fraction_channel=args.x_fraction_channel,
-        y_meter_channel=args.y_meter_channel,
-        y_fraction_channel=args.y_fraction_channel,
-        z_meter_channel=args.z_meter_channel,
-        z_fraction_channel=args.z_fraction_channel,
-        use_rgb_colors=not args.no_rgb,
-        red_channel=args.red_channel,
-        green_channel=args.green_channel,
-        blue_channel=args.blue_channel,
-        rgb_clip_low_percentile=args.rgb_clip_low,
-        rgb_clip_high_percentile=args.rgb_clip_high,
-    )
+    def _build_config(input_path: Path, output_path: Path) -> ConversionConfig:
+        return ConversionConfig(
+            input_path=input_path,
+            output_path=output_path,
+            channel=args.channel,
+            x_scale=args.x_scale,
+            y_scale=args.y_scale,
+            z_scale=args.z_scale,
+            x_offset=args.x_offset,
+            y_offset=args.y_offset,
+            z_offset=args.z_offset,
+            invert_y=not args.no_invert_y,
+            band_index=args.band,
+            use_envi_coordinates=args.envi_coordinates,
+            x_meter_channel=args.x_meter_channel,
+            x_fraction_channel=args.x_fraction_channel,
+            y_meter_channel=args.y_meter_channel,
+            y_fraction_channel=args.y_fraction_channel,
+            z_meter_channel=args.z_meter_channel,
+            z_fraction_channel=args.z_fraction_channel,
+            use_rgb_colors=not args.no_rgb,
+            red_channel=args.red_channel,
+            green_channel=args.green_channel,
+            blue_channel=args.blue_channel,
+            rgb_clip_low_percentile=args.rgb_clip_low,
+            rgb_clip_high_percentile=args.rgb_clip_high,
+        )
+
+    if args.input.is_dir():
+        args.output.mkdir(parents=True, exist_ok=True)
+        result = convert_root_folder(args.input, args.output, _build_config)
+        for output_path in result.converted:
+            print(f"Converted: {output_path}")
+        for input_path, message in result.failed:
+            print(f"Failed: {input_path} -> {message}")
+        if result.failed:
+            return 1
+        if not result.converted:
+            print("No ENVI-fused .hdr files found under input root.")
+            return 1
+        return 0
+
+    config = _build_config(args.input, args.output)
     convert_image_to_las(config)
     return 0
 

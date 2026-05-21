@@ -6,6 +6,15 @@ Each pixel becomes one point. By default the pixel brightness is used as height,
 
 ## Release Notes
 
+### v1.4
+
+- Added root-folder batch processing for ENVI-fused inputs with per-plot output folders.
+- Added natural plot ordering (`1, 2, 3, ... 10, ... 100`) for batch runs.
+- Added GUI batch progress logging for source scan and per-file progress (`X/Y`).
+- Added GUI cancel button to stop batch processing between files.
+- Added GUI option to skip LAS writing for fast tests while still producing reports/shapefiles.
+- Added GUI checkboxes to select VNIR and/or SWIR processing.
+
 ### v1.3
 
 - Added persistent GUI/debug launch support for the project venv.
