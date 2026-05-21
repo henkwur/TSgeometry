@@ -61,3 +61,4 @@ image2las data.hdr output.las --band 54  # Use specific spectral band for height
 - ENVI hyperspectral files are read through the `spectral` library.
 - Transparent pixels are skipped when the image has an alpha channel.
 - The default band ordering for many hyperspectral sensors is `[NIR, Red, Green]`; adjust band indices accordingly.
+- When ENVI metadata contains georeference fields, the converter writes RD New shapefiles for available points (`*_Offset.shp`, `*_plotoffset.shp`, `*_PlotEnter.shp`, `*_PlotExit.shp`) and `*_offsets.txt` with source fields plus the exact calculations.

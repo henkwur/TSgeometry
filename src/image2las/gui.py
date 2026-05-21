@@ -233,8 +233,7 @@ class App(tk.Tk):
             return
 
         output_folder.mkdir(parents=True, exist_ok=True)
-        stem = input_path.stem.split(".")[0]  # strip double extensions like .cmb
-        output_path = output_folder / f"{stem}.las"
+        output_path = output_folder / f"{input_path.stem}.las"
 
         self._collect_settings()
 

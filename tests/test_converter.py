@@ -204,8 +204,10 @@ def test_plot_position_shifts_output_from_rd_origin(tmp_path: Path) -> None:
 
     original_offset = tmp_path / "input_Offset.shp"
     translated_offset = tmp_path / "input_plotoffset.shp"
+    offsets_txt = tmp_path / "input_offsets.txt"
     assert original_offset.exists()
     assert translated_offset.exists()
+    assert offsets_txt.exists()
 
     original_reader = shapefile.Reader(str(original_offset))
     translated_reader = shapefile.Reader(str(translated_offset))
@@ -216,6 +218,73 @@ def test_plot_position_shifts_output_from_rd_origin(tmp_path: Path) -> None:
     assert original_point[1] == pytest.approx(2000.0, abs=1e-6)
     assert translated_point[0] == pytest.approx(1003.0, abs=1e-6)
     assert translated_point[1] == pytest.approx(1996.0, abs=1e-6)
+
+    lines = offsets_txt.read_text(encoding="utf-8").strip().splitlines()
+    assert "Georeference calculation report" in lines
+    assert "- OffsetLat/OffsetLong source: ENVI 'extrainfo' (OffsetLat/OffsetLong)" in lines
+    assert "- PlotPositionX/PlotPositionY source: ENVI 'extrainfo' (PlotPositionX/PlotPositionY)" in lines
+    assert "   PlotOffset.X = 1000.000000 + 3.000000000000 = 1003.000000" in lines
+    assert "   PlotOffset.Y = 2000.000000 + -4.000000000000 = 1996.000000" in lines
+    assert "Name\tX\tY" in lines
+    assert "Offset\t1000.000000\t2000.000000" in lines
+    assert "PlotOffset\t1003.000000\t1996.000000" in lines
+
+
+def test_plot_enter_exit_are_exported_to_rdnew_and_reported(tmp_path: Path) -> None:
+    input_path = tmp_path / "input.png"
+    output_path = tmp_path / "output.las"
+
+    image = Image.new("L", (1, 1))
+    image.putdata([0])
+    image.save(input_path)
+
+    from image2las import converter
+
+    original_read_metadata = converter._read_envi_metadata
+    original_extract_offset = converter._extract_offset_wgs84
+    original_wgs84_to_rd = converter._wgs84_to_rd_new
+    try:
+        converter._read_envi_metadata = lambda _p: {
+            "extrainfo": "{ PlotEnterLat:51.100000, PlotEnterLong:5.200000, PlotExitLat:51.300000, PlotExitLong:5.400000 }"
+        }
+        converter._extract_offset_wgs84 = lambda _m: None
+        converter._wgs84_to_rd_new = lambda lat, lon: (lon * 1000.0, lat * 1000.0)
+
+        convert_image_to_las(
+            ConversionConfig(
+                input_path=input_path,
+                output_path=output_path,
+                invert_y=False,
+                use_envi_coordinates=False,
+            )
+        )
+    finally:
+        converter._read_envi_metadata = original_read_metadata
+        converter._extract_offset_wgs84 = original_extract_offset
+        converter._wgs84_to_rd_new = original_wgs84_to_rd
+
+    plot_enter = tmp_path / "input_PlotEnter.shp"
+    plot_exit = tmp_path / "input_PlotExit.shp"
+    offsets_txt = tmp_path / "input_offsets.txt"
+    assert plot_enter.exists()
+    assert plot_exit.exists()
+    assert offsets_txt.exists()
+
+    enter_reader = shapefile.Reader(str(plot_enter))
+    exit_reader = shapefile.Reader(str(plot_exit))
+    enter_point = enter_reader.shape(0).points[0]
+    exit_point = exit_reader.shape(0).points[0]
+
+    assert enter_point[0] == pytest.approx(5200.0, abs=1e-6)
+    assert enter_point[1] == pytest.approx(51100.0, abs=1e-6)
+    assert exit_point[0] == pytest.approx(5400.0, abs=1e-6)
+    assert exit_point[1] == pytest.approx(51300.0, abs=1e-6)
+
+    lines = offsets_txt.read_text(encoding="utf-8").strip().splitlines()
+    assert "- PlotEnterLat/PlotEnterLong source: ENVI 'extrainfo' (PlotEnterLat/PlotEnterLong)" in lines
+    assert "- PlotExitLat/PlotExitLong source: ENVI 'extrainfo' (PlotExitLat/PlotExitLong)" in lines
+    assert "PlotEnter\t5200.000000\t51100.000000" in lines
+    assert "PlotExit\t5400.000000\t51300.000000" in lines
 
 
 def test_rotation_happens_after_plot_position_translation(tmp_path: Path) -> None:

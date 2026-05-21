@@ -9,7 +9,13 @@
       "request": "launch",
       "module": "image2las.gui",
       "console": "integratedTerminal",
-      "cwd": "${workspaceFolder}"
+      "cwd": "${workspaceFolder}",
+      "python": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}\\src",
+        "PYTHONHOME": "",
+        "PYTHONNOUSERSITE": "1"
+      }
     }
   ]
 }

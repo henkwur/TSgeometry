@@ -1,6 +1,7 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 import re
 from typing import Literal
@@ -41,6 +42,135 @@ class ConversionConfig:
     blue_channel: int = 24
     rgb_clip_low_percentile: float = 1.0
     rgb_clip_high_percentile: float = 99.5
+
+
+def _offset_source_label(metadata: dict) -> str:
+    if metadata.get("offsetlat") is not None and metadata.get("offsetlong") is not None:
+        return "ENVI keys 'offsetlat' and 'offsetlong'"
+    if isinstance(metadata.get("extrainfo"), str):
+        return "ENVI 'extrainfo' (OffsetLat/OffsetLong)"
+    return "unknown"
+
+
+def _plot_position_source_label(metadata: dict) -> str:
+    if metadata.get("plotpositionx") is not None and metadata.get("plotpositiony") is not None:
+        return "ENVI keys 'plotpositionx' and 'plotpositiony'"
+    if isinstance(metadata.get("extrainfo"), str):
+        return "ENVI 'extrainfo' (PlotPositionX/PlotPositionY)"
+    return "not present; defaults to 0,0"
+
+
+def _plot_point_source_label(metadata: dict, point_name: str) -> str:
+    lower_name = point_name.lower()
+    if metadata.get(f"{lower_name}lat") is not None and metadata.get(f"{lower_name}long") is not None:
+        return f"ENVI keys '{lower_name}lat' and '{lower_name}long'"
+    if isinstance(metadata.get("extrainfo"), str):
+        return f"ENVI 'extrainfo' ({point_name}Lat/{point_name}Long)"
+    return "unknown"
+
+
+def _write_georef_report(
+    txt_path: Path,
+    input_name: str,
+    offset_source: str | None,
+    plot_position_source: str | None,
+    plot_enter_source: str | None,
+    plot_exit_source: str | None,
+    offset_wgs84: tuple[float, float] | None,
+    offset_rd: tuple[float, float] | None,
+    plot_position: tuple[float, float] | None,
+    plot_offset_rd: tuple[float, float] | None,
+    plot_enter_wgs84: tuple[float, float] | None,
+    plot_enter_rd: tuple[float, float] | None,
+    plot_exit_wgs84: tuple[float, float] | None,
+    plot_exit_rd: tuple[float, float] | None,
+) -> None:
+    """Write georeference report with source fields and explicit calculations."""
+    txt_path.parent.mkdir(parents=True, exist_ok=True)
+    generated_utc = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    with txt_path.open("w", encoding="utf-8", newline="\n") as handle:
+        handle.write("Georeference calculation report\n\n")
+        handle.write("Context\n")
+        handle.write(f"- Input image: {input_name}\n")
+        handle.write(f"- Generated (UTC): {generated_utc}\n\n")
+
+        handle.write("Sources\n")
+        if offset_source is not None:
+            handle.write(f"- OffsetLat/OffsetLong source: {offset_source}\n")
+        if plot_position_source is not None:
+            handle.write(f"- PlotPositionX/PlotPositionY source: {plot_position_source}\n")
+        if plot_enter_source is not None:
+            handle.write(f"- PlotEnterLat/PlotEnterLong source: {plot_enter_source}\n")
+        if plot_exit_source is not None:
+            handle.write(f"- PlotExitLat/PlotExitLong source: {plot_exit_source}\n")
+        handle.write("- CRS conversion: WGS84 (EPSG:4326) -> RD New (EPSG:28992) via pyproj Transformer\n\n")
+
+        handle.write("Input values\n")
+        if offset_wgs84 is not None:
+            handle.write(f"- OffsetLat = {offset_wgs84[0]:.12f}\n")
+            handle.write(f"- OffsetLong = {offset_wgs84[1]:.12f}\n")
+        if plot_position is not None:
+            handle.write(f"- PlotPositionX = {plot_position[0]:.12f}\n")
+            handle.write(f"- PlotPositionY = {plot_position[1]:.12f}\n")
+        if plot_enter_wgs84 is not None:
+            handle.write(f"- PlotEnterLat = {plot_enter_wgs84[0]:.12f}\n")
+            handle.write(f"- PlotEnterLong = {plot_enter_wgs84[1]:.12f}\n")
+        if plot_exit_wgs84 is not None:
+            handle.write(f"- PlotExitLat = {plot_exit_wgs84[0]:.12f}\n")
+            handle.write(f"- PlotExitLong = {plot_exit_wgs84[1]:.12f}\n")
+        handle.write("\n")
+
+        handle.write("Calculations\n")
+        step = 1
+        if offset_wgs84 is not None and offset_rd is not None:
+            handle.write(f"{step}) Offset (RD New)\n")
+            handle.write("   [Offset.X, Offset.Y] = transform_wgs84_to_rdnew(OffsetLong, OffsetLat)\n")
+            handle.write(
+                "   [Offset.X, Offset.Y] = "
+                f"transform_wgs84_to_rdnew({offset_wgs84[1]:.12f}, {offset_wgs84[0]:.12f}) "
+                f"= [{offset_rd[0]:.6f}, {offset_rd[1]:.6f}]\n\n"
+            )
+            step += 1
+
+        if offset_rd is not None and plot_offset_rd is not None:
+            px = plot_position[0] if plot_position is not None else 0.0
+            py = plot_position[1] if plot_position is not None else 0.0
+            handle.write(f"{step}) PlotOffset (translated from Offset)\n")
+            handle.write("   PlotOffset.X = Offset.X + PlotPositionX\n")
+            handle.write("   PlotOffset.Y = Offset.Y + PlotPositionY\n")
+            handle.write(f"   PlotOffset.X = {offset_rd[0]:.6f} + {px:.12f} = {plot_offset_rd[0]:.6f}\n")
+            handle.write(f"   PlotOffset.Y = {offset_rd[1]:.6f} + {py:.12f} = {plot_offset_rd[1]:.6f}\n\n")
+            step += 1
+
+        if plot_enter_wgs84 is not None and plot_enter_rd is not None:
+            handle.write(f"{step}) PlotEnter (RD New)\n")
+            handle.write("   [PlotEnter.X, PlotEnter.Y] = transform_wgs84_to_rdnew(PlotEnterLong, PlotEnterLat)\n")
+            handle.write(
+                "   [PlotEnter.X, PlotEnter.Y] = "
+                f"transform_wgs84_to_rdnew({plot_enter_wgs84[1]:.12f}, {plot_enter_wgs84[0]:.12f}) "
+                f"= [{plot_enter_rd[0]:.6f}, {plot_enter_rd[1]:.6f}]\n\n"
+            )
+            step += 1
+
+        if plot_exit_wgs84 is not None and plot_exit_rd is not None:
+            handle.write(f"{step}) PlotExit (RD New)\n")
+            handle.write("   [PlotExit.X, PlotExit.Y] = transform_wgs84_to_rdnew(PlotExitLong, PlotExitLat)\n")
+            handle.write(
+                "   [PlotExit.X, PlotExit.Y] = "
+                f"transform_wgs84_to_rdnew({plot_exit_wgs84[1]:.12f}, {plot_exit_wgs84[0]:.12f}) "
+                f"= [{plot_exit_rd[0]:.6f}, {plot_exit_rd[1]:.6f}]\n\n"
+            )
+
+        handle.write("Results\n")
+        handle.write("Name\tX\tY\n")
+        if offset_rd is not None:
+            handle.write(f"Offset\t{offset_rd[0]:.6f}\t{offset_rd[1]:.6f}\n")
+        if plot_offset_rd is not None:
+            handle.write(f"PlotOffset\t{plot_offset_rd[0]:.6f}\t{plot_offset_rd[1]:.6f}\n")
+        if plot_enter_rd is not None:
+            handle.write(f"PlotEnter\t{plot_enter_rd[0]:.6f}\t{plot_enter_rd[1]:.6f}\n")
+        if plot_exit_rd is not None:
+            handle.write(f"PlotExit\t{plot_exit_rd[0]:.6f}\t{plot_exit_rd[1]:.6f}\n")
 
 
 def _read_envi_metadata(hdr_path: Path) -> dict:
@@ -128,6 +258,29 @@ def _extract_plot_position(metadata: dict) -> tuple[float, float] | None:
         return None
 
     return float(x_match.group(1)), float(y_match.group(1))
+
+
+def _extract_plot_point_wgs84(metadata: dict, point_name: str) -> tuple[float, float] | None:
+    """Extract PlotEnter/PlotExit WGS84 lat/long from ENVI metadata."""
+    lower_name = point_name.lower()
+    lat = metadata.get(f"{lower_name}lat")
+    lon = metadata.get(f"{lower_name}long")
+    if lat is not None and lon is not None:
+        try:
+            return float(lat), float(lon)
+        except (TypeError, ValueError):
+            return None
+
+    extra_info = metadata.get("extrainfo")
+    if not isinstance(extra_info, str):
+        return None
+
+    lat_match = re.search(rf"{point_name}Lat\s*:\s*([-+]?\d+(?:\.\d+)?)", extra_info)
+    lon_match = re.search(rf"{point_name}Long\s*:\s*([-+]?\d+(?:\.\d+)?)", extra_info)
+    if not lat_match or not lon_match:
+        return None
+
+    return float(lat_match.group(1)), float(lon_match.group(1))
 
 
 def _rotate_xy_from_north_clockwise(x: np.ndarray, y: np.ndarray, angle_deg: float) -> tuple[np.ndarray, np.ndarray]:
@@ -324,10 +477,18 @@ def convert_image_to_las(config: ConversionConfig) -> Path:
     metadata = _read_envi_metadata(config.input_path)
     plot_angle_deg = _extract_plot_angle(metadata)
     plot_position = _extract_plot_position(metadata)
+    plot_enter_wgs84 = _extract_plot_point_wgs84(metadata, "PlotEnter")
+    plot_exit_wgs84 = _extract_plot_point_wgs84(metadata, "PlotExit")
+    plot_enter_rd: tuple[float, float] | None = None
+    plot_exit_rd: tuple[float, float] | None = None
     rd_origin: tuple[float, float] | None = None
     wgs84_origin = _extract_offset_wgs84(metadata)
     if wgs84_origin is not None:
         rd_origin = _wgs84_to_rd_new(wgs84_origin[0], wgs84_origin[1])
+    if plot_enter_wgs84 is not None:
+        plot_enter_rd = _wgs84_to_rd_new(plot_enter_wgs84[0], plot_enter_wgs84[1])
+    if plot_exit_wgs84 is not None:
+        plot_exit_rd = _wgs84_to_rd_new(plot_exit_wgs84[0], plot_exit_wgs84[1])
 
     red_points: np.ndarray | None = None
     green_points: np.ndarray | None = None
@@ -433,6 +594,7 @@ def convert_image_to_las(config: ConversionConfig) -> Path:
         las.blue = blue_points
     las.write(config.output_path)
 
+    plot_offset_rd: tuple[float, float] | None = None
     if rd_origin is not None:
         offset_shp_path = config.output_path.parent / f"{config.input_path.stem}_Offset.shp"
         _write_offset_shapefile(offset_shp_path, rd_origin[0], rd_origin[1], config.input_path.stem)
@@ -442,8 +604,37 @@ def convert_image_to_las(config: ConversionConfig) -> Path:
         if plot_position is not None:
             translated_x += plot_position[0]
             translated_y += plot_position[1]
+        plot_offset_rd = (translated_x, translated_y)
         plot_offset_shp_path = config.output_path.parent / f"{config.input_path.stem}_plotoffset.shp"
         _write_offset_shapefile(plot_offset_shp_path, translated_x, translated_y, f"{config.input_path.stem}_plotoffset")
 
+    if plot_enter_rd is not None:
+        plot_enter_shp_path = config.output_path.parent / f"{config.input_path.stem}_PlotEnter.shp"
+        _write_offset_shapefile(plot_enter_shp_path, plot_enter_rd[0], plot_enter_rd[1], f"{config.input_path.stem}_PlotEnter")
+
+    if plot_exit_rd is not None:
+        plot_exit_shp_path = config.output_path.parent / f"{config.input_path.stem}_PlotExit.shp"
+        _write_offset_shapefile(plot_exit_shp_path, plot_exit_rd[0], plot_exit_rd[1], f"{config.input_path.stem}_PlotExit")
+
+    if rd_origin is not None or plot_enter_rd is not None or plot_exit_rd is not None:
+        report_path = config.output_path.parent / f"{config.input_path.stem}_offsets.txt"
+        _write_georef_report(
+            report_path,
+            config.input_path.name,
+            _offset_source_label(metadata) if wgs84_origin is not None else None,
+            _plot_position_source_label(metadata) if rd_origin is not None else None,
+            _plot_point_source_label(metadata, "PlotEnter") if plot_enter_wgs84 is not None else None,
+            _plot_point_source_label(metadata, "PlotExit") if plot_exit_wgs84 is not None else None,
+            wgs84_origin,
+            rd_origin,
+            plot_position,
+            plot_offset_rd,
+            plot_enter_wgs84,
+            plot_enter_rd,
+            plot_exit_wgs84,
+            plot_exit_rd,
+        )
+
     return config.output_path
+
 
