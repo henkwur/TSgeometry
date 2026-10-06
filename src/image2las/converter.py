@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 import re
-from typing import Literal
+from typing import Any, Literal, cast
 
 import laspy
 import numpy as np
@@ -314,7 +314,7 @@ def _write_offset_shapefile(shp_path: Path, rd_x: float, rd_y: float, source_nam
     shp_path.parent.mkdir(parents=True, exist_ok=True)
 
     with shapefile.Writer(str(shp_path), shapeType=shapefile.POINT) as writer:
-        writer.autoBalance = 1
+        writer.autoBalance = True
         writer.field("name", "C", size=80)
         writer.field("x_rd", "F", size=18, decimal=3)
         writer.field("y_rd", "F", size=18, decimal=3)
@@ -341,7 +341,7 @@ def _load_image_array(input_path: Path) -> np.ndarray:
         try:
             import spectral as spy
 
-            img = spy.open_image(str(input_path))
+            img = cast(Any, spy.open_image(str(input_path)))
             return np.asarray(img.load())
         except Exception as exc:
             raise ValueError(
@@ -579,11 +579,21 @@ def convert_image_to_las(config: ConversionConfig) -> Path:
 
     # Set LAS header with proper scales for 0.1mm precision
     header = laspy.LasHeader(point_format=3, version="1.2")
-    header.scales = [0.0001, 0.0001, 0.0001]
+    header.scales = np.array([0.0001, 0.0001, 0.0001], dtype=np.float64)
     if plot_origin_x is not None and plot_origin_y is not None:
-        header.offsets = [plot_origin_x, plot_origin_y, float(z_points.min(initial=0.0))]
+        header.offsets = np.array(
+            [plot_origin_x, plot_origin_y, float(z_points.min(initial=0.0))],
+            dtype=np.float64,
+        )
     else:
-        header.offsets = [float(x_points.min(initial=0.0)), float(y_points.min(initial=0.0)), float(z_points.min(initial=0.0))]
+        header.offsets = np.array(
+            [
+                float(x_points.min(initial=0.0)),
+                float(y_points.min(initial=0.0)),
+                float(z_points.min(initial=0.0)),
+            ],
+            dtype=np.float64,
+        )
 
     if config.write_las:
         las = laspy.LasData(header)
@@ -594,7 +604,8 @@ def convert_image_to_las(config: ConversionConfig) -> Path:
             las.red = red_points
             las.green = green_points
             las.blue = blue_points
-        las.write(config.output_path)
+        with config.output_path.open("wb") as output_file:
+            las.write(output_file)
 
     plot_offset_rd: tuple[float, float] | None = None
     if rd_origin is not None:
