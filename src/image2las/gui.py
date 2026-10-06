@@ -2,13 +2,23 @@
 from __future__ import annotations
 
 import json
+import sys
 import threading
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 
-from .batch import convert_root_folder, discover_envi_fused_hdr_files_filtered
-from .converter import ConversionConfig, convert_image_to_las
+if __package__:
+    from .batch import convert_root_folder, discover_envi_fused_hdr_files_filtered
+    from .converter import ConversionConfig, convert_image_to_las
+else:
+    # VS Code's "Run Python File" executes gui.py as a standalone script.
+    # Add the src directory so package imports work in that launch mode too.
+    src_directory = str(Path(__file__).resolve().parents[1])
+    if src_directory not in sys.path:
+        sys.path.insert(0, src_directory)
+    from image2las.batch import convert_root_folder, discover_envi_fused_hdr_files_filtered
+    from image2las.converter import ConversionConfig, convert_image_to_las
 
 # ---------------------------------------------------------------------------
 # Settings persistence
@@ -65,11 +75,9 @@ class App(tk.Tk):
     # ------------------------------------------------------------------
 
     def _build_ui(self) -> None:
-        pad = {"padx": 8, "pady": 4}
-
         # ---- Files frame ------------------------------------------------
         files_frame = ttk.LabelFrame(self, text="Bestanden", padding=8)
-        files_frame.pack(fill="x", **pad)
+        files_frame.pack(fill="x", padx=8, pady=4)
         files_frame.columnconfigure(1, weight=1)
 
         ttk.Label(files_frame, text="Invoer (bestand of rootmap):").grid(row=0, column=0, sticky="w")
@@ -95,7 +103,7 @@ class App(tk.Tk):
 
         # ---- ENVI coordinates frame -------------------------------------
         envi_frame = ttk.LabelFrame(self, text="ENVI-coördinaten", padding=8)
-        envi_frame.pack(fill="x", **pad)
+        envi_frame.pack(fill="x", padx=8, pady=4)
 
         self._envi_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(
@@ -115,7 +123,7 @@ class App(tk.Tk):
 
         # ---- RGB frame --------------------------------------------------
         rgb_frame = ttk.LabelFrame(self, text="RGB-kleuren", padding=8)
-        rgb_frame.pack(fill="x", **pad)
+        rgb_frame.pack(fill="x", padx=8, pady=4)
 
         self._rgb_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(
@@ -140,7 +148,7 @@ class App(tk.Tk):
 
         # ---- Output options --------------------------------------------
         output_opts_frame = ttk.LabelFrame(self, text="Output-opties", padding=8)
-        output_opts_frame.pack(fill="x", **pad)
+        output_opts_frame.pack(fill="x", padx=8, pady=4)
 
         self._write_las_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(
@@ -389,11 +397,15 @@ class App(tk.Tk):
             self.after(0, self._log_msg, f"Verwerk bestand {index}/{total}: {input_hdr.name}")
 
         try:
+            cancel_event = self._cancel_event
+            if cancel_event is None:
+                raise RuntimeError("Batch annulering is niet geïnitialiseerd.")
+
             result = convert_root_folder(
                 root_folder,
                 output_folder,
                 _build_config,
-                should_cancel=(lambda: self._cancel_event.is_set()) if self._cancel_event is not None else None,
+                should_cancel=cancel_event.is_set,
                 on_progress=_on_progress,
                 include_vnir=self._process_vnir_var.get(),
                 include_swir=self._process_swir_var.get(),
