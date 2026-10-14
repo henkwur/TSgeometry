@@ -85,6 +85,7 @@ def _write_georef_report(
     plot_enter_rd: tuple[float, float] | None,
     plot_exit_wgs84: tuple[float, float] | None,
     plot_exit_rd: tuple[float, float] | None,
+    plot_angle_deg: float | None = None,
 ) -> None:
     """Write georeference report with source fields and explicit calculations."""
     txt_path.parent.mkdir(parents=True, exist_ok=True)
@@ -113,8 +114,10 @@ def _write_georef_report(
         if plot_position is not None:
             handle.write(f"- PlotPositionX = {plot_position[0]:.12f}\n")
             handle.write(f"- PlotPositionY = {plot_position[1]:.12f}\n")
+        if plot_angle_deg is not None:
+            handle.write(f"- PlotAngle = {plot_angle_deg:.12f}\n")
         if plot_enter_wgs84 is not None:
-            handle.write(f"- PlotEnterLat = {plot_enter_wgs84[0]:.12f}\n")
+            handle.write(f"- PlotEnterLat =  {plot_enter_wgs84[0]:.12f}\n")
             handle.write(f"- PlotEnterLong = {plot_enter_wgs84[1]:.12f}\n")
         if plot_exit_wgs84 is not None:
             handle.write(f"- PlotExitLat = {plot_exit_wgs84[0]:.12f}\n")
@@ -168,6 +171,8 @@ def _write_georef_report(
             handle.write(f"Offset\t{offset_rd[0]:.6f}\t{offset_rd[1]:.6f}\n")
         if plot_offset_rd is not None:
             handle.write(f"PlotOffset\t{plot_offset_rd[0]:.6f}\t{plot_offset_rd[1]:.6f}\n")
+        if plot_angle_deg is not None:
+            handle.write(f"PlotAngle\t{plot_angle_deg:.6f}\n")
         if plot_enter_rd is not None:
             handle.write(f"PlotEnter\t{plot_enter_rd[0]:.6f}\t{plot_enter_rd[1]:.6f}\n")
         if plot_exit_rd is not None:
@@ -307,8 +312,19 @@ def _wgs84_to_rd_new(lat: float, lon: float) -> tuple[float, float]:
     return float(x_rd), float(y_rd)
 
 
-def _write_offset_shapefile(shp_path: Path, rd_x: float, rd_y: float, source_name: str) -> None:
-    """Write a point shapefile in RD New (EPSG:28992) for the offset origin."""
+def _rd_new_to_wgs84(x: float, y: float) -> tuple[float, float]:
+    """Convert RD New (EPSG:28992) to WGS84; returns (lat, lon)."""
+    from pyproj import Transformer
+
+    transformer = Transformer.from_crs("EPSG:28992", "EPSG:4326", always_xy=True)
+    lon, lat = transformer.transform(x, y)
+    return float(lat), float(lon)
+
+
+def _write_offset_shapefile(
+    shp_path: Path, rd_x: float, rd_y: float, source_name: str, wgs84: bool = False
+) -> None:
+    """Write a point shapefile in RD New (EPSG:28992), or WGS84 (x=lon, y=lat) when wgs84 is True."""
     import shapefile
 
     shp_path.parent.mkdir(parents=True, exist_ok=True)
@@ -316,10 +332,23 @@ def _write_offset_shapefile(shp_path: Path, rd_x: float, rd_y: float, source_nam
     with shapefile.Writer(str(shp_path), shapeType=shapefile.POINT) as writer:
         writer.autoBalance = True
         writer.field("name", "C", size=80)
-        writer.field("x_rd", "F", size=18, decimal=3)
-        writer.field("y_rd", "F", size=18, decimal=3)
+        if wgs84:
+            writer.field("lon", "F", size=18, decimal=12)
+            writer.field("lat", "F", size=18, decimal=12)
+        else:
+            writer.field("x_rd", "F", size=18, decimal=3)
+            writer.field("y_rd", "F", size=18, decimal=3)
         writer.point(rd_x, rd_y)
         writer.record(source_name, rd_x, rd_y)
+
+    if wgs84:
+        prj_wkt = (
+            'GEOGCS["GCS_WGS_1984",DATUM["D_WGS_1984",SPHEROID["WGS_1984",6378137.0,298.257223563]],'
+            'PRIMEM["Greenwich",0.0],UNIT["Degree",0.0174532925199433]]'
+        )
+        shp_path.with_suffix(".prj").write_text(prj_wkt, encoding="ascii")
+        shp_path.with_suffix(".cpg").write_text("UTF-8\n", encoding="ascii")
+        return
 
     # Coordinate reference for RD New.
     prj_wkt = (
@@ -611,6 +640,14 @@ def convert_image_to_las(config: ConversionConfig) -> Path:
     if rd_origin is not None:
         offset_shp_path = config.output_path.parent / f"{config.input_path.stem}_Offset.shp"
         _write_offset_shapefile(offset_shp_path, rd_origin[0], rd_origin[1], config.input_path.stem)
+        if wgs84_origin is not None:
+            _write_offset_shapefile(
+                config.output_path.parent / f"{config.input_path.stem}_Offset_WGS84.shp",
+                wgs84_origin[1],
+                wgs84_origin[0],
+                config.input_path.stem,
+                wgs84=True,
+            )
 
         translated_x = rd_origin[0]
         translated_y = rd_origin[1]
@@ -620,15 +657,34 @@ def convert_image_to_las(config: ConversionConfig) -> Path:
         plot_offset_rd = (translated_x, translated_y)
         plot_offset_shp_path = config.output_path.parent / f"{config.input_path.stem}_plotoffset.shp"
         _write_offset_shapefile(plot_offset_shp_path, translated_x, translated_y, f"{config.input_path.stem}_plotoffset")
-
+        plot_offset_lat, plot_offset_lon = _rd_new_to_wgs84(translated_x, translated_y)
+        _write_offset_shapefile(
+            config.output_path.parent / f"{config.input_path.stem}_plotoffset_WGS84.shp",
+            plot_offset_lon,
+            plot_offset_lat,
+            f"{config.input_path.stem}_plotoffset",
+            wgs84=True,
+        )
     if plot_enter_rd is not None:
         plot_enter_shp_path = config.output_path.parent / f"{config.input_path.stem}_PlotEnter.shp"
         _write_offset_shapefile(plot_enter_shp_path, plot_enter_rd[0], plot_enter_rd[1], f"{config.input_path.stem}_PlotEnter")
-
+        _write_offset_shapefile(
+            config.output_path.parent / f"{config.input_path.stem}_PlotEnter_WGS84.shp",
+            plot_enter_wgs84[1],
+            plot_enter_wgs84[0],
+            f"{config.input_path.stem}_PlotEnter",
+            wgs84=True,
+        )
     if plot_exit_rd is not None:
         plot_exit_shp_path = config.output_path.parent / f"{config.input_path.stem}_PlotExit.shp"
         _write_offset_shapefile(plot_exit_shp_path, plot_exit_rd[0], plot_exit_rd[1], f"{config.input_path.stem}_PlotExit")
-
+        _write_offset_shapefile(
+            config.output_path.parent / f"{config.input_path.stem}_PlotExit_WGS84.shp",
+            plot_exit_wgs84[1],
+            plot_exit_wgs84[0],
+            f"{config.input_path.stem}_PlotExit",
+            wgs84=True,
+        )
     if rd_origin is not None or plot_enter_rd is not None or plot_exit_rd is not None:
         report_path = config.output_path.parent / f"{config.input_path.stem}_offsets.txt"
         _write_georef_report(
@@ -646,6 +702,7 @@ def convert_image_to_las(config: ConversionConfig) -> Path:
             plot_enter_rd,
             plot_exit_wgs84,
             plot_exit_rd,
+            plot_angle_deg,
         )
 
     return config.output_path
