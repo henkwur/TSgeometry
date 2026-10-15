@@ -10,7 +10,7 @@ from tkinter import filedialog, messagebox, scrolledtext, ttk
 
 if __package__:
     from .batch import convert_root_folder, discover_envi_fused_hdr_files_filtered
-    from .converter import ConversionConfig, convert_image_to_las
+    from .converter import ConversionConfig, convert_image_to_las, read_plot_angle
 else:
     # VS Code's "Run Python File" executes gui.py as a standalone script.
     # Add the src directory so package imports work in that launch mode too.
@@ -18,7 +18,7 @@ else:
     if src_directory not in sys.path:
         sys.path.insert(0, src_directory)
     from image2las.batch import convert_root_folder, discover_envi_fused_hdr_files_filtered
-    from image2las.converter import ConversionConfig, convert_image_to_las
+    from image2las.converter import ConversionConfig, convert_image_to_las, read_plot_angle
 
 # ---------------------------------------------------------------------------
 # Settings persistence
@@ -350,8 +350,17 @@ class App(tk.Tk):
                 self._log_msg(f"Converteer {input_path.name} → {output_path} …")
             else:
                 self._log_msg(f"Converteer {input_path.name} (zonder LAS schrijven) …")
+            self._log_plot_angle(input_path)
             thread = threading.Thread(target=self._run_conversion, args=(config, output_path), daemon=True)
         thread.start()
+
+    def _log_plot_angle(self, hdr_path: Path) -> None:
+        try:
+            angle = read_plot_angle(hdr_path)
+        except Exception:  # noqa: BLE001
+            return
+        if angle is not None:
+            self._log_msg(f"PlotAngle: {angle:.6f}°")
 
     def _run_conversion(self, config: ConversionConfig, output_path: Path) -> None:
         try:
@@ -395,6 +404,7 @@ class App(tk.Tk):
 
         def _on_progress(index: int, total: int, input_hdr: Path) -> None:
             self.after(0, self._log_msg, f"Verwerk bestand {index}/{total}: {input_hdr.name}")
+            self.after(0, self._log_plot_angle, input_hdr)
 
         try:
             cancel_event = self._cancel_event

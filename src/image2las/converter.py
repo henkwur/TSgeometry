@@ -324,6 +324,11 @@ _RD_NEW_PRJ_WKT = (
 )
 
 
+def read_plot_angle(input_path: Path) -> float | None:
+    """Return the PlotAngle (degrees) from the ENVI header belonging to input_path, if present."""
+    return _extract_plot_angle(_read_envi_metadata(input_path))
+
+
 def _rd_new_to_wgs84(x: float, y: float) -> tuple[float, float]:
     """Convert RD New (EPSG:28992) to WGS84; returns (lat, lon)."""
     from pyproj import Transformer
