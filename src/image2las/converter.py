@@ -312,6 +312,18 @@ def _wgs84_to_rd_new(lat: float, lon: float) -> tuple[float, float]:
     return float(x_rd), float(y_rd)
 
 
+_RD_NEW_PRJ_WKT = (
+    'PROJCS["Amersfoort / RD New",GEOGCS["Amersfoort",DATUM["Amersfoort",'
+    'SPHEROID["Bessel 1841",6377397.155,299.1528128]],PRIMEM["Greenwich",0],'
+    'UNIT["degree",0.0174532925199433]],PROJECTION["Oblique_Stereographic"],'
+    'PARAMETER["latitude_of_origin",52.15616055555555],'
+    'PARAMETER["central_meridian",5.38763888888889],'
+    'PARAMETER["scale_factor",0.9999079],'
+    'PARAMETER["false_easting",155000],PARAMETER["false_northing",463000],'
+    'UNIT["metre",1],AXIS["X",EAST],AXIS["Y",NORTH]]'
+)
+
+
 def _rd_new_to_wgs84(x: float, y: float) -> tuple[float, float]:
     """Convert RD New (EPSG:28992) to WGS84; returns (lat, lon)."""
     from pyproj import Transformer
@@ -350,18 +362,7 @@ def _write_offset_shapefile(
         shp_path.with_suffix(".cpg").write_text("UTF-8\n", encoding="ascii")
         return
 
-    # Coordinate reference for RD New.
-    prj_wkt = (
-        'PROJCS["Amersfoort / RD New",GEOGCS["Amersfoort",DATUM["Amersfoort",'
-        'SPHEROID["Bessel 1841",6377397.155,299.1528128]],PRIMEM["Greenwich",0],'
-        'UNIT["degree",0.0174532925199433]],PROJECTION["Oblique_Stereographic"],'
-        'PARAMETER["latitude_of_origin",52.15616055555555],'
-        'PARAMETER["central_meridian",5.38763888888889],'
-        'PARAMETER["scale_factor",0.9999079],'
-        'PARAMETER["false_easting",155000],PARAMETER["false_northing",463000],'
-        'UNIT["metre",1],AXIS["X",EAST],AXIS["Y",NORTH]]'
-    )
-    shp_path.with_suffix(".prj").write_text(prj_wkt, encoding="ascii")
+    shp_path.with_suffix(".prj").write_text(_RD_NEW_PRJ_WKT, encoding="ascii")
     shp_path.with_suffix(".cpg").write_text("UTF-8\n", encoding="ascii")
 
 
@@ -635,6 +636,8 @@ def convert_image_to_las(config: ConversionConfig) -> Path:
             las.blue = blue_points
         with config.output_path.open("wb") as output_file:
             las.write(output_file)
+        if rd_origin is not None:
+            config.output_path.with_suffix(".prj").write_text(_RD_NEW_PRJ_WKT, encoding="ascii")
 
     plot_offset_rd: tuple[float, float] | None = None
     if rd_origin is not None:
@@ -665,7 +668,7 @@ def convert_image_to_las(config: ConversionConfig) -> Path:
             f"{config.input_path.stem}_plotoffset",
             wgs84=True,
         )
-    if plot_enter_rd is not None:
+    if plot_enter_rd is not None and plot_enter_wgs84 is not None:
         plot_enter_shp_path = config.output_path.parent / f"{config.input_path.stem}_PlotEnter.shp"
         _write_offset_shapefile(plot_enter_shp_path, plot_enter_rd[0], plot_enter_rd[1], f"{config.input_path.stem}_PlotEnter")
         _write_offset_shapefile(
@@ -675,7 +678,7 @@ def convert_image_to_las(config: ConversionConfig) -> Path:
             f"{config.input_path.stem}_PlotEnter",
             wgs84=True,
         )
-    if plot_exit_rd is not None:
+    if plot_exit_rd is not None and plot_exit_wgs84 is not None:
         plot_exit_shp_path = config.output_path.parent / f"{config.input_path.stem}_PlotExit.shp"
         _write_offset_shapefile(plot_exit_shp_path, plot_exit_rd[0], plot_exit_rd[1], f"{config.input_path.stem}_PlotExit")
         _write_offset_shapefile(
